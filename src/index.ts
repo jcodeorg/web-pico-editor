@@ -104,7 +104,8 @@ const autoconnect = false;
 
 let portCounter = 1;
 let picoport: SerialPort | SerialPortPolyfill | undefined;
-let reader: ReadableStreamDefaultReader | ReadableStreamBYOBReader | undefined;
+let picoreader:
+  ReadableStreamDefaultReader | ReadableStreamBYOBReader | undefined;
 
 const urlParams = new URLSearchParams(window.location.search);
 const usePolyfill = urlParams.has('polyfill');
@@ -504,14 +505,14 @@ class Pico {
     let result: { value?: Uint8Array, done?: boolean } = {};
     if (picoport && picoport.readable) {
       try {
-        reader = picoport.readable.getReader({mode: 'byob'});
+        picoreader = picoport.readable.getReader({mode: 'byob'});
         let buffer = null;
         result = await (async () => {
           if (!buffer) {
             buffer = new ArrayBuffer(bufferSize);
           }
           const {value, done} =
-              await reader.read(new Uint8Array(buffer, 0, bufferSize));
+              await picoreader.read(new Uint8Array(buffer, 0, bufferSize));
           buffer = value?.buffer;
           return {value, done};
         })();
@@ -526,30 +527,24 @@ class Pico {
           }
         });
       } finally {
-        if (reader) {
-          reader.releaseLock();
-          reader = undefined;
+        if (picoreader) {
+          picoreader.releaseLock();
+          picoreader = undefined;
         }
       }
     }
     return result.value;
   }
-}
-
-// Pico クラスのインスタンスを作成
-const pico = new Pico();
-
-/**
- * Initiates a connection to the selected port.
- */
-async function connectToPort(): Promise<void> {
-  await pico.openpicoport();
-  let value: Uint8Array | undefined;
-  while (picoport && picoport.readable) {
-    value = await pico.readpicoport();
-    if (value) {
-      pico.putBuffer(value); // バッファに蓄積 or ターミナルに出力
+  /**
+   * Initiates a connection to the selected port.
+   */
+  async connectToPort(): Promise<void> {
+    await this.openpicoport();
+    let value: Uint8Array | undefined;
+    while (picoport && picoport.readable) {
+      value = await this.readpicoport();
       if (value) {
+        this.putBuffer(value); // バッファに蓄積 or ターミナルに出力
         await new Promise<void>((resolve) => {
           if (value !== undefined) {
             term.write(value, resolve);
@@ -557,9 +552,12 @@ async function connectToPort(): Promise<void> {
         });
       }
     }
+    await this.closepicoport();
   }
-  await pico.closepicoport();
 }
+
+// Pico クラスのインスタンスを作成
+const pico = new Pico();
 
 /**
  * Closes the currently active connection.
@@ -570,8 +568,8 @@ async function disconnectFromPort(): Promise<void> {
   const localPort = picoport;
   picoport = undefined;
 
-  if (reader) {
-    await reader.cancel();
+  if (picoreader) {
+    await picoreader.cancel();
   }
 
   if (localPort) {
@@ -613,7 +611,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (picoport) {
       disconnectFromPort();
     } else {
-      connectToPort();
+      pico.connectToPort();
     }
   });
 
@@ -629,7 +627,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const portOption = addNewPort(event.target as SerialPort);
       if (autoconnect) {
         portOption.selected = true;
-        connectToPort();
+        pico.connectToPort();
       }
     });
     navigator.serial.addEventListener('disconnect', (event) => {
