@@ -40,17 +40,26 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Send Textボタンのクリックイベント
-  const sendTextButton =
-    document.getElementById('sendTextButton') as HTMLButtonElement;
-  sendTextButton.addEventListener('click', async () => {
-    await sendText(editor);
+  const saveFileButton =
+    document.getElementById('saveFileButton') as HTMLButtonElement;
+  saveFileButton.addEventListener('click', async () => {
+    const text = editor.getValue();
+    await pico.writeFile('temp.py', text); // エディタの内容をファイルに書き込む
   });
 
   // run Code ボタンのクリックイベント
   const runCodeButton =
     document.getElementById('runCodeButton') as HTMLButtonElement;
   runCodeButton.addEventListener('click', async () => {
-    await runCode(editor);
+    const text = editor.getValue();
+    await pico.runCode(text); // 実行
+  });
+
+  // STOPボタン：CTRL-C を送信
+  const stopButton =
+    document.getElementById('stopButton') as HTMLButtonElement;
+  stopButton.addEventListener('click', ()=> {
+    pico.sendCommand('\x03'); // CTRL+C
   });
 });
 
@@ -82,28 +91,6 @@ async function loadMainPy(editor: monaco.editor.IStandaloneCodeEditor) {
 }
 
 /**
- * Send the content of the editor to the MicroPython device.
- *
- * @param {monaco.editor.IStandaloneCodeEditor} editor
- *  - The Monaco editor instance.
- */
-async function sendText(editor: monaco.editor.IStandaloneCodeEditor) {
-  const text = editor.getValue();
-  await pico.writeFile('temp.py', text); // エディタの内容をファイルに書き込む
-}
-
-/**
- * Run the content of the editor to the MicroPython device.
- *
- * @param {monaco.editor.IStandaloneCodeEditor} editor
- *  - The Monaco editor instance.
- */
-async function runCode(editor: monaco.editor.IStandaloneCodeEditor) {
-  const text = editor.getValue();
-  await pico.runCode(text); // 実行
-}
-
-/**
  * Elements of the port selection dropdown extend HTMLOptionElement so that
  * they can reference the SerialPort they represent.
  */
@@ -116,7 +103,7 @@ let connectButton: HTMLButtonElement;
 const autoconnect = false;
 
 let portCounter = 1;
-let port: SerialPort | SerialPortPolyfill | undefined;
+let picoport: SerialPort | SerialPortPolyfill | undefined;
 let reader: ReadableStreamDefaultReader | ReadableStreamBYOBReader | undefined;
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -138,12 +125,12 @@ term.onData((data) => {
   // echoCheckbox.checked
   //   term.write(data);
 
-  if (port?.writable == null) {
+  if (picoport?.writable == null) {
     console.warn(`unable to find writable port`);
     return;
   }
 
-  const writer = port.writable.getWriter();
+  const writer = picoport.writable.getWriter();
   writer.write(encoder.encode(data));
   writer.releaseLock();
 });
@@ -250,15 +237,15 @@ async function getSelectedPort(): Promise<void> {
   if (portSelector.value == 'prompt') {
     try {
       const serial = usePolyfill ? polyfill : navigator.serial;
-      port = await serial.requestPort({});
+      picoport = await serial.requestPort({});
     } catch (e) {
       return;
     }
-    const portOption = maybeAddNewPort(port);
+    const portOption = maybeAddNewPort(picoport);
     portOption.selected = true;
   } else {
     const selectedOption = portSelector.selectedOptions[0] as PortOption;
-    port = selectedOption.port;
+    picoport = selectedOption.port;
   }
 }
 
@@ -275,8 +262,8 @@ class Pico {
    * The writer instance or null if not available.
    */
   prepareWritablePort() {
-    if (port && port.writable) {
-      this.writer = port.writable.getWriter();
+    if (picoport && picoport.writable) {
+      this.writer = picoport.writable.getWriter();
     } else {
       this.writer = null;
     }
@@ -313,7 +300,7 @@ class Pico {
   async writeFile(filename: string, content: string) {
     if (this.prepareWritablePort()) {
       const lines = content.split('\n');
-      await this.write('\x05'); // CTRL+E
+      await this.write('\x01'); // CTRL+A
       await this.write(`with open("${filename}", "w") as f:\r`);
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -329,7 +316,20 @@ class Pico {
       }
       await this.write('\x04'); // CTRL+D
       this.releaseLock();
+      pico.sendCommand('\x02'); // CTRL+B
     }
+  }
+  /**
+   * Put buffer to the terminal or store it in the buffer.
+   * @param {Uint8Array} value - value to put
+   */
+  private putBuffer(value: Uint8Array | undefined): void {
+    const stringValue = value ? new TextDecoder().decode(value) : '';
+    if (stringValue) {
+      this.picoRecivedBuff += stringValue;
+    }
+    const logval = '[BUFF]' + stringValue + '[...]';
+    console.log(logval);
   }
 
   /**
@@ -338,27 +338,12 @@ class Pico {
    */
   async runCode(content: string) {
     if (this.prepareWritablePort()) {
-      await this.write('\x05'); // CTRL+E
+      await this.write('\x01'); // CTRL+A
       await this.write(content);
       await this.write('\x04'); // CTRL+D
+      await this.write('\x02'); // CTRL+B
       this.releaseLock();
     }
-  }
-
-  /**
-   * Puts a buffer value and logs it to the console.
-   *
-   * @param {Uint8Array} value - The buffer value to be logged.
-   * @param {boolean} done - A boolean indicating whether the operation is done.
-   */
-  public putBuffer(value: Uint8Array | undefined, done: boolean): void {
-    const stringValue = value ? new TextDecoder().decode(value) : '';
-    if (stringValue) {
-      this.picoRecivedBuff += stringValue;
-    }
-    const logval =
-      '[BUFF]' + stringValue + (done ? '[Done]' : '[...]');
-    console.log(logval);
   }
 
   /**
@@ -373,7 +358,7 @@ class Pico {
     return combinedArray;
   }
 
-  private isDataTransferMode = false;
+  public isDataTransferMode = false;
 
   /**
    * Retrieves the received buffer.
@@ -451,70 +436,78 @@ class Pico {
       this.releaseLock();
     }
   }
-}
 
-// Pico クラスのインスタンスを作成
-const pico = new Pico();
-
-/**
- * Resets the UI back to the disconnected state.
- */
-function markDisconnected(): void {
-  term.writeln('<DISCONNECTED>');
-  portSelector.disabled = false;
-  connectButton.textContent = 'Connect';
-  connectButton.disabled = false;
-  connectButton.classList.add('button-default');
-  port = undefined;
-}
-
-/**
- * Initiates a connection to the selected port.
- */
-async function connectToPort(): Promise<void> {
-  await getSelectedPort();
-  if (!port) {
-    return;
-  }
-
-  const options = {
-    baudRate: 115200,
-    dataBits: 8,
-    parity: 'none',
-    stopBits: 1,
-  };
-  console.log(options);
-
-  portSelector.disabled = true;
-  connectButton.textContent = 'Connecting...';
-  connectButton.classList.remove('button-default');
-
-  try {
-    await port.open(options);
-    term.writeln('<CONNECTED>');
-    connectButton.textContent = 'Disconnect';
+  /**
+   * Resets the UI back to the disconnected state.
+   */
+  public markDisconnected(): void {
+    term.writeln('<DISCONNECTED>');
+    portSelector.disabled = false;
+    connectButton.textContent = 'Connect';
     connectButton.disabled = false;
-  } catch (e) {
-    console.error(e);
-    if (e instanceof Error) {
-      term.writeln(`<ERROR: ${e.message}>`);
-    }
-    markDisconnected();
-    return;
+    connectButton.classList.add('button-default');
+    picoport = undefined;
   }
 
-  while (port && port.readable) {
+  /**
+   * Open the port.
+   */
+  async openpicoport(): Promise<void> {
+    await getSelectedPort();
+    if (!picoport) {
+      return;
+    }
+    const options = {
+      baudRate: 115200,
+      dataBits: 8,
+      parity: 'none',
+      stopBits: 1,
+    };
+    console.log(options);
+    portSelector.disabled = true;
+    connectButton.textContent = 'Connecting...';
+    connectButton.classList.remove('button-default');
     try {
-      try {
-        reader = port.readable.getReader({mode: 'byob'});
-      } catch {
-        reader = port.readable.getReader();
+      await picoport.open(options);
+      term.writeln('<CONNECTED>');
+      connectButton.textContent = 'Disconnect';
+      connectButton.disabled = false;
+    } catch (e) {
+      console.error(e);
+      if (e instanceof Error) {
+        term.writeln(`<ERROR: ${e.message}>`);
       }
-
-      let buffer = null;
-      for (;;) {
-        const {value, done} = await (async () => {
-          if (reader instanceof ReadableStreamBYOBReader) {
+      this.markDisconnected();
+      return;
+    }
+  }
+  /**
+   * Close the port.
+   */
+  async closepicoport(): Promise<void> {
+    if (picoport) {
+      try {
+        await picoport.close();
+      } catch (e) {
+        console.error(e);
+        if (e instanceof Error) {
+          term.writeln(`<ERROR: ${e.message}>`);
+        }
+      }
+      this.markDisconnected();
+    }
+  }
+  /**
+   * read the port.
+   */
+  async readpicoport(): Promise<Uint8Array | undefined> {
+    let result: { value?: Uint8Array, done?: boolean } = {};
+    if (picoport && picoport.readable) {
+      try {
+        reader = picoport.readable.getReader({mode: 'byob'});
+        let buffer = null;
+        for (;;) {
+          result = await (async () => {
             if (!buffer) {
               buffer = new ArrayBuffer(bufferSize);
             }
@@ -522,49 +515,50 @@ async function connectToPort(): Promise<void> {
                 await reader.read(new Uint8Array(buffer, 0, bufferSize));
             buffer = value?.buffer;
             return {value, done};
-          } else {
-            return await reader.read();
+          })();
+          pico.putBuffer(result.value); // バッファに蓄積 or ターミナルに出力
+          if (result.value) {
+            await new Promise<void>((resolve) => {
+              if (result.value !== undefined) {
+                term.write(result.value, resolve);
+              }
+            });
           }
-        })();
-
-        pico.putBuffer(value, done); // バッファに蓄積する
-
-        if (value) {
-          await new Promise<void>((resolve) => {
-            term.write(value, resolve);
-          });
+          if (result.done) {
+            break;
+          }
         }
-        if (done) {
-          break;
+      } catch (e) {
+        console.error(e);
+        await new Promise<void>((resolve) => {
+          if (e instanceof Error) {
+            term.writeln(`<ERROR: ${e.message}>`, resolve);
+          }
+        });
+      } finally {
+        if (reader) {
+          reader.releaseLock();
+          reader = undefined;
         }
-      }
-    } catch (e) {
-      console.error(e);
-      await new Promise<void>((resolve) => {
-        if (e instanceof Error) {
-          term.writeln(`<ERROR: ${e.message}>`, resolve);
-        }
-      });
-    } finally {
-      if (reader) {
-        reader.releaseLock();
-        reader = undefined;
       }
     }
+    return result.value;
   }
+}
 
-  if (port) {
-    try {
-      await port.close();
-    } catch (e) {
-      console.error(e);
-      if (e instanceof Error) {
-        term.writeln(`<ERROR: ${e.message}>`);
-      }
-    }
+// Pico クラスのインスタンスを作成
+const pico = new Pico();
 
-    markDisconnected();
+/**
+ * Initiates a connection to the selected port.
+ */
+async function connectToPort(): Promise<void> {
+  await pico.openpicoport();
+
+  while (picoport && picoport.readable) {
+    await pico.readpicoport();
   }
+  await pico.closepicoport();
 }
 
 /**
@@ -573,8 +567,8 @@ async function connectToPort(): Promise<void> {
 async function disconnectFromPort(): Promise<void> {
   // Move |port| into a local variable so that connectToPort() doesn't try to
   // close it on exit.
-  const localPort = port;
-  port = undefined;
+  const localPort = picoport;
+  picoport = undefined;
 
   if (reader) {
     await reader.cancel();
@@ -591,7 +585,7 @@ async function disconnectFromPort(): Promise<void> {
     }
   }
 
-  markDisconnected();
+  pico.markDisconnected();
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -612,16 +606,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const clearOutput = document.getElementById('clear') as HTMLSelectElement;
   clearOutput.addEventListener('click', clearTerminalContents);
 
-  // STOPボタン：CTRL-C を送信
-  const stopButton =
-    document.getElementById('stopButton') as HTMLButtonElement;
-  stopButton.addEventListener('click', sendCtrlC);
-
   portSelector = document.getElementById('ports') as HTMLSelectElement;
 
   connectButton = document.getElementById('connect') as HTMLButtonElement;
   connectButton.addEventListener('click', () => {
-    if (port) {
+    if (picoport) {
       disconnectFromPort();
     } else {
       connectToPort();
@@ -651,10 +640,3 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 });
-
-/**
- * Send CTRL+C to the terminal.
- */
-async function sendCtrlC() {
-  pico.sendCommand('\x03'); // CTRL+C
-}
