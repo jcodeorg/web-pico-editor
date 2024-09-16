@@ -323,7 +323,7 @@ class Pico {
    * Put buffer to the terminal or store it in the buffer.
    * @param {Uint8Array} value - value to put
    */
-  private putBuffer(value: Uint8Array | undefined): void {
+  public putBuffer(value: Uint8Array | undefined): void {
     const stringValue = value ? new TextDecoder().decode(value) : '';
     if (stringValue) {
       this.picoRecivedBuff += stringValue;
@@ -506,28 +506,18 @@ class Pico {
       try {
         reader = picoport.readable.getReader({mode: 'byob'});
         let buffer = null;
-        for (;;) {
-          result = await (async () => {
-            if (!buffer) {
-              buffer = new ArrayBuffer(bufferSize);
-            }
-            const {value, done} =
-                await reader.read(new Uint8Array(buffer, 0, bufferSize));
-            buffer = value?.buffer;
-            return {value, done};
-          })();
-          pico.putBuffer(result.value); // バッファに蓄積 or ターミナルに出力
-          if (result.value) {
-            await new Promise<void>((resolve) => {
-              if (result.value !== undefined) {
-                term.write(result.value, resolve);
-              }
-            });
+        result = await (async () => {
+          if (!buffer) {
+            buffer = new ArrayBuffer(bufferSize);
           }
-          if (result.done) {
-            break;
-          }
-        }
+          const {value, done} =
+              await reader.read(new Uint8Array(buffer, 0, bufferSize));
+          buffer = value?.buffer;
+          return {value, done};
+        })();
+        const stringValue =
+          result.value ? new TextDecoder().decode(result.value) : '';
+        console.log('Received:', result.done, stringValue);
       } catch (e) {
         console.error(e);
         await new Promise<void>((resolve) => {
@@ -554,9 +544,19 @@ const pico = new Pico();
  */
 async function connectToPort(): Promise<void> {
   await pico.openpicoport();
-
+  let value: Uint8Array | undefined;
   while (picoport && picoport.readable) {
-    await pico.readpicoport();
+    value = await pico.readpicoport();
+    if (value) {
+      pico.putBuffer(value); // バッファに蓄積 or ターミナルに出力
+      if (value) {
+        await new Promise<void>((resolve) => {
+          if (value !== undefined) {
+            term.write(value, resolve);
+          }
+        });
+      }
+    }
   }
   await pico.closepicoport();
 }
