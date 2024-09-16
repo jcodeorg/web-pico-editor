@@ -113,15 +113,7 @@ declare class PortOption extends HTMLOptionElement {
 
 let portSelector: HTMLSelectElement;
 let connectButton: HTMLButtonElement;
-let baudRateSelector: HTMLSelectElement;
-let customBaudRateInput: HTMLInputElement;
-let dataBitsSelector: HTMLSelectElement;
-let paritySelector: HTMLSelectElement;
-let stopBitsSelector: HTMLSelectElement;
-let flowControlCheckbox: HTMLInputElement;
-let echoCheckbox: HTMLInputElement;
-let flushOnEnterCheckbox: HTMLInputElement;
-let autoconnectCheckbox: HTMLInputElement;
+const autoconnect = false;
 
 let portCounter = 1;
 let port: SerialPort | SerialPortPolyfill | undefined;
@@ -141,11 +133,10 @@ term.loadAddon(fitAddon);
 term.loadAddon(new WebLinksAddon());
 
 const encoder = new TextEncoder();
-let toFlush = '';
+
 term.onData((data) => {
-  if (echoCheckbox.checked) {
-    term.write(data);
-  }
+  // echoCheckbox.checked
+  //   term.write(data);
 
   if (port?.writable == null) {
     console.warn(`unable to find writable port`);
@@ -153,18 +144,7 @@ term.onData((data) => {
   }
 
   const writer = port.writable.getWriter();
-
-  if (flushOnEnterCheckbox.checked) {
-    toFlush += data;
-    if (data === '\r') {
-      writer.write(encoder.encode(toFlush));
-      writer.releaseLock();
-      toFlush = '';
-    }
-  } else {
-    writer.write(encoder.encode(data));
-  }
-
+  writer.write(encoder.encode(data));
   writer.releaseLock();
 });
 
@@ -280,16 +260,6 @@ async function getSelectedPort(): Promise<void> {
     const selectedOption = portSelector.selectedOptions[0] as PortOption;
     port = selectedOption.port;
   }
-}
-
-/**
- * @return {number} the currently selected baud rate
- */
-function getSelectedBaudRate(): number {
-  if (baudRateSelector.value == 'custom') {
-    return Number.parseInt(customBaudRateInput.value);
-  }
-  return Number.parseInt(baudRateSelector.value);
 }
 
 /**
@@ -486,7 +456,6 @@ class Pico {
 // Pico クラスのインスタンスを作成
 const pico = new Pico();
 
-
 /**
  * Resets the UI back to the disconnected state.
  */
@@ -495,12 +464,7 @@ function markDisconnected(): void {
   portSelector.disabled = false;
   connectButton.textContent = 'Connect';
   connectButton.disabled = false;
-  baudRateSelector.disabled = false;
-  customBaudRateInput.disabled = false;
-  dataBitsSelector.disabled = false;
-  paritySelector.disabled = false;
-  stopBitsSelector.disabled = false;
-  flowControlCheckbox.disabled = false;
+  connectButton.classList.add('button-default');
   port = undefined;
 }
 
@@ -514,31 +478,16 @@ async function connectToPort(): Promise<void> {
   }
 
   const options = {
-    baudRate: getSelectedBaudRate(),
-    dataBits: Number.parseInt(dataBitsSelector.value),
-    parity: paritySelector.value as ParityType,
-    stopBits: Number.parseInt(stopBitsSelector.value),
-    flowControl:
-        flowControlCheckbox.checked ? <const> 'hardware' : <const> 'none',
-    bufferSize,
-
-    // Prior to Chrome 86 these names were used.
-    baudrate: getSelectedBaudRate(),
-    databits: Number.parseInt(dataBitsSelector.value),
-    stopbits: Number.parseInt(stopBitsSelector.value),
-    rtscts: flowControlCheckbox.checked,
+    baudRate: 115200,
+    dataBits: 8,
+    parity: 'none',
+    stopBits: 1,
   };
   console.log(options);
 
   portSelector.disabled = true;
   connectButton.textContent = 'Connecting...';
-  connectButton.disabled = true;
-  baudRateSelector.disabled = true;
-  customBaudRateInput.disabled = true;
-  dataBitsSelector.disabled = true;
-  paritySelector.disabled = true;
-  stopBitsSelector.disabled = true;
-  flowControlCheckbox.disabled = true;
+  connectButton.classList.remove('button-default');
 
   try {
     await port.open(options);
@@ -668,17 +617,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('stopButton') as HTMLButtonElement;
   stopButton.addEventListener('click', sendCtrlC);
 
-  // 送信ボタン：テキストを送信
-  const sendTextButton =
-    document.getElementById('sendTextButton22') as HTMLButtonElement;
-  sendTextButton.addEventListener('click', sendText22);
-
-  // 読み込みボタン：main.pyを読み込む
-  const loadFileButton =
-    document.getElementById('loadFileButton22') as HTMLButtonElement;
-  loadFileButton.addEventListener('click', loadMainPy22);
-
-
   portSelector = document.getElementById('ports') as HTMLSelectElement;
 
   connectButton = document.getElementById('connect') as HTMLButtonElement;
@@ -690,44 +628,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  baudRateSelector = document.getElementById('baudrate') as HTMLSelectElement;
-  baudRateSelector.addEventListener('input', () => {
-    if (baudRateSelector.value == 'custom') {
-      customBaudRateInput.hidden = false;
-    } else {
-      customBaudRateInput.hidden = true;
-    }
-  });
-
-  customBaudRateInput =
-      document.getElementById('custom_baudrate') as HTMLInputElement;
-  dataBitsSelector = document.getElementById('databits') as HTMLSelectElement;
-  paritySelector = document.getElementById('parity') as HTMLSelectElement;
-  stopBitsSelector = document.getElementById('stopbits') as HTMLSelectElement;
-  flowControlCheckbox = document.getElementById('rtscts') as HTMLInputElement;
-  echoCheckbox = document.getElementById('echo') as HTMLInputElement;
-  flushOnEnterCheckbox =
-      document.getElementById('enter_flush') as HTMLInputElement;
-  autoconnectCheckbox =
-      document.getElementById('autoconnect') as HTMLInputElement;
-
-  const convertEolCheckbox =
-      document.getElementById('convert_eol') as HTMLInputElement;
-  const convertEolCheckboxHandler = () => {
-    term.options.convertEol = convertEolCheckbox.checked;
-  };
-  convertEolCheckbox.addEventListener('change', convertEolCheckboxHandler);
-  convertEolCheckboxHandler();
-
-  const polyfillSwitcher =
-      document.getElementById('polyfill_switcher') as HTMLAnchorElement;
-  if (usePolyfill) {
-    polyfillSwitcher.href = './';
-    polyfillSwitcher.textContent = 'Switch to native API';
-  } else {
-    polyfillSwitcher.href = './?polyfill';
-    polyfillSwitcher.textContent = 'Switch to API polyfill';
-  }
 
   const serial = usePolyfill ? polyfill : navigator.serial;
   const ports: (SerialPort | SerialPortPolyfill)[] = await serial.getPorts();
@@ -738,7 +638,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!usePolyfill) {
     navigator.serial.addEventListener('connect', (event) => {
       const portOption = addNewPort(event.target as SerialPort);
-      if (autoconnectCheckbox.checked) {
+      if (autoconnect) {
         portOption.selected = true;
         connectToPort();
       }
@@ -752,45 +652,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
-
 /**
  * Send CTRL+C to the terminal.
  */
 async function sendCtrlC() {
   pico.sendCommand('\x03'); // CTRL+C
-}
-
-/**
- * Send text from the textarea to the terminal.
- */
-async function sendText22() {
-  const textInput = document.getElementById('textInput') as HTMLTextAreaElement;
-  const text = textInput.value;
-  await pico.writeFile('temp.py', text); // textInputの内容をファイルに書き込む
-}
-
-/**
- * Load main.py from the MicroPython device and display it in the textarea.
- */
-async function loadMainPy22() {
-  if (pico.prepareWritablePort()) {
-    await pico.write('\x01'); // CTRL+A：raw モード
-    await pico.write('import os\r');
-    await pico.write('with open("temp.py") as f:\r');
-    await pico.write('  print(f.read())\r');
-    await pico.write('\x04'); // CTRL+D
-    pico.releaseLock();
-
-    await pico.waitForOK(); // ">OK"を待つ
-    const result = pico.getReceivedData();
-    console.log('result:', result);
-    const hexResult = Array.from(result, (char) =>
-      char.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
-    console.log('dump:', hexResult);
-    pico.sendCommand('\x02'); // CTRL+B
-
-    const textInput =
-      document.getElementById('textInput') as HTMLTextAreaElement;
-    textInput.value = result; // Display the result in the textarea
-  }
 }
