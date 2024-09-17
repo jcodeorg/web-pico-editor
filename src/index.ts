@@ -299,6 +299,10 @@ class Pico {
    * @param {string} content - The content to write to the file.
    */
   async writeFile(filename: string, content: string) {
+    if (picoreader) {
+      await picoreader.cancel(); // ターミナル出力を停止
+    }
+    this.clearpicoport(); // ターミナル出力せずに読み込み（バッファをクリア）
     if (this.prepareWritablePort()) {
       const lines = content.split('\n');
       await this.write('\x01'); // CTRL+A
@@ -319,6 +323,10 @@ class Pico {
       this.releaseLock();
       pico.sendCommand('\x02'); // CTRL+B
     }
+    if (picoreader) {
+      await picoreader.cancel(); // ターミナル出力を停止
+    }
+    this.readpicoport(); // ターミナル出力を再開
   }
   /**
    * Put buffer to the terminal or store it in the buffer.
@@ -460,11 +468,7 @@ class Pico {
     }
     const options = {
       baudRate: 115200,
-      dataBits: 8,
-      parity: 'none',
-      stopBits: 1,
     };
-    console.log(options);
     portSelector.disabled = true;
     connectButton.textContent = 'Connecting...';
     connectButton.classList.remove('button-default');
@@ -501,9 +505,9 @@ class Pico {
   /**
    * read the port.
    */
-  async readpicoport(): Promise<Uint8Array | undefined> {
+  async readpicoport(): Promise<undefined> {
     let result: { value?: Uint8Array, done?: boolean } = {};
-    if (picoport && picoport.readable) {
+    while (picoport && picoport.readable) {
       try {
         picoreader = picoport.readable.getReader({mode: 'byob'});
         let buffer = null;
@@ -519,6 +523,17 @@ class Pico {
         const stringValue =
           result.value ? new TextDecoder().decode(result.value) : '';
         console.log('Received:', result.done, stringValue);
+        if (result.value) {
+          this.putBuffer(result.value); // バッファに蓄積 or ターミナルに出力
+          await new Promise<void>((resolve) => {
+            if (result.value !== undefined) {
+              term.write(result.value, resolve);
+            }
+          });
+        }
+        if (result.done) {
+          break;
+        }
       } catch (e) {
         console.error(e);
         await new Promise<void>((resolve) => {
@@ -533,26 +548,56 @@ class Pico {
         }
       }
     }
-    return result.value;
+  }
+  /**
+   * 読み込みバッファをクリア
+   */
+  async clearpicoport(): Promise<undefined> {
+    let result: { value?: Uint8Array, done?: boolean } = {};
+    while (picoport && picoport.readable) {
+      try {
+        picoreader = picoport.readable.getReader({mode: 'byob'});
+        let buffer = null;
+        result = await (async () => {
+          if (!buffer) {
+            buffer = new ArrayBuffer(bufferSize);
+          }
+          const {value, done} =
+              await picoreader.read(new Uint8Array(buffer, 0, bufferSize));
+          buffer = value?.buffer;
+          return {value, done};
+        })();
+        if (result.value) {
+          const stringValue =
+            result.value ? new TextDecoder().decode(result.value) : '';
+          console.log('skip:', stringValue);
+        }
+        if (result.done) {
+          break;
+        }
+      } catch (e) {
+        console.error(e);
+        await new Promise<void>((resolve) => {
+          if (e instanceof Error) {
+            term.writeln(`<ERROR: ${e.message}>`, resolve);
+          }
+        });
+      } finally {
+        if (picoreader) {
+          picoreader.releaseLock();
+          picoreader = undefined;
+        }
+      }
+    }
   }
   /**
    * Initiates a connection to the selected port.
    */
   async connectToPort(): Promise<void> {
-    await this.openpicoport();
-    let value: Uint8Array | undefined;
-    while (picoport && picoport.readable) {
-      value = await this.readpicoport();
-      if (value) {
-        this.putBuffer(value); // バッファに蓄積 or ターミナルに出力
-        await new Promise<void>((resolve) => {
-          if (value !== undefined) {
-            term.write(value, resolve);
-          }
-        });
-      }
-    }
-    await this.closepicoport();
+    await this.openpicoport(); // ポートを開く
+    await this.readpicoport(); // ポートから読み取りターミナルに出力
+    term.writeln('<DONE!!!!!!!>');
+    // await this.closepicoport();
   }
 }
 
