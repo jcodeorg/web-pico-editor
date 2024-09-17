@@ -35,6 +35,14 @@
       background-color: blue; /* ボタンの背景色 */
       color: white;             /* テキストの色 */
     }
+    .button-run {
+      background-color: green; /* ボタンの背景色 */
+      color: white;             /* テキストの色 */
+    }
+    .button-stop {
+      background-color: red; /* ボタンの背景色 */
+      color: white;             /* テキストの色 */
+    }
   </style>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.28.1/min/vs/editor/editor.main.min.css">
 </head>
@@ -45,23 +53,22 @@
       <option value="prompt">Click 'Connect' to add a port...</option>
     </select>
     <button id="connect" class="button-default">Connect</button>
-
-    <button id="download">Download output</button>
-    <button id="clear">Clear output</button>
-
     <div class="info">
       <a href="https://github.com/jcodeorg/web-pico-editor">Source Code on GitHub</a>
     </div>
   </div>
-
-  <button id="loadFileButton">Load temp.py</button>
-  <button id="saveFileButton">Save temp.py</button>
-  <button id="runCodeButton">RUN</button>
-  <button id="stopButton">STOP</button>
-  <div id="editor"></div>
-  <br>
-  <div id="terminal"></div>
-
+  <div class="options">
+    <button id="loadFileButton">Load temp.py</button>
+    <button id="saveFileButton">Save temp.py</button>
+    <button id="runCodeButton" class="button-run">RUN</button>
+    <button id="stopButton" class="button-stop">STOP</button>
+    <div id="editor"></div>
+  </div>
+  <div class="options">
+    <button id="download">Download output</button>
+    <button id="clear">Clear output</button>
+    <div id="terminal"></div>
+  </div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.28.1/min/vs/loader.min.js"></script>
   <script src="/src/index.ts" type="module"></script>
 </body>
