@@ -36,7 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const loadFileButton =
     document.getElementById('loadFileButton') as HTMLButtonElement;
   loadFileButton.addEventListener('click', async () => {
-    await loadMainPy(editor);
+    await loadTempPy(editor);
   });
 
   // Send Textボタンのクリックイベント
@@ -69,7 +69,10 @@ document.addEventListener('DOMContentLoaded', () => {
  * @param {monaco.editor.IStandaloneCodeEditor} editor
  *  - The Monaco editor instance.
  */
-async function loadMainPy(editor: monaco.editor.IStandaloneCodeEditor) {
+async function loadTempPy(editor: monaco.editor.IStandaloneCodeEditor) {
+  if (picoreader) {
+    await picoreader.cancel(); // ターミナル出力を停止
+  }
   if (pico.prepareWritablePort()) {
     await pico.write('\x01'); // CTRL+A：raw モード
     await pico.write('import os\r');
@@ -77,9 +80,10 @@ async function loadMainPy(editor: monaco.editor.IStandaloneCodeEditor) {
     await pico.write('  print(f.read())\r');
     await pico.write('\x04'); // CTRL+D
     pico.releaseLock();
-
-    await pico.waitForOK(); // ">OK"を待つ
-    const result = pico.getReceivedData();
+    console.log('!!!!!!!!!!Waiting for >OK');
+    await pico.clearpicoport('OK'); // ">OK"を待つ
+    console.log('!!!!!!!!!!Waiting for CTRL-D');
+    const result = await pico.clearpicoport('\x04'); // "CTRL-D"を待つ
     console.log('result:', result);
     const hexResult = Array.from(result, (char) =>
       char.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
@@ -88,6 +92,7 @@ async function loadMainPy(editor: monaco.editor.IStandaloneCodeEditor) {
 
     editor.setValue(result); // エディタに結果を表示
   }
+  pico.readpicoport(); // ターミナル出力を再開
 }
 
 /**
@@ -109,7 +114,6 @@ let picoreader:
 
 const urlParams = new URLSearchParams(window.location.search);
 const usePolyfill = urlParams.has('polyfill');
-const bufferSize = 8 * 1024; // 8kB
 
 const term = new Terminal({
   scrollback: 10_000,
@@ -255,7 +259,6 @@ async function getSelectedPort(): Promise<void> {
  */
 class Pico {
   private writer: WritableStreamDefaultWriter | null = null;
-  private picoRecivedBuff = '';
 
   /**
    * Prepare the writable port.
@@ -302,7 +305,7 @@ class Pico {
     if (picoreader) {
       await picoreader.cancel(); // ターミナル出力を停止
     }
-    this.clearpicoport(); // ターミナル出力せずに読み込み（バッファをクリア）
+    this.clearpicoport(false); // ターミナル出力せずに読み込み（バッファをクリア）
     if (this.prepareWritablePort()) {
       const lines = content.split('\n');
       await this.write('\x01'); // CTRL+A
@@ -328,18 +331,6 @@ class Pico {
     }
     this.readpicoport(); // ターミナル出力を再開
   }
-  /**
-   * Put buffer to the terminal or store it in the buffer.
-   * @param {Uint8Array} value - value to put
-   */
-  public putBuffer(value: Uint8Array | undefined): void {
-    const stringValue = value ? new TextDecoder().decode(value) : '';
-    if (stringValue) {
-      this.picoRecivedBuff += stringValue;
-    }
-    const logval = '[BUFF]' + stringValue + '[...]';
-    console.log(logval);
-  }
 
   /**
    * Run code on the MicroPython device.
@@ -352,85 +343,6 @@ class Pico {
       await this.write('\x04'); // CTRL+D
       await this.write('\x02'); // CTRL+B
       this.releaseLock();
-    }
-  }
-
-  /**
-   * Retrieves the received buffer.
-   *
-   * @return {string} The received buffer as a string.
-   */
-  public getReceivedBuff(): string {
-    const combinedArray = this.picoRecivedBuff;
-    // バッファをクリア
-    this.picoRecivedBuff = '';
-    return combinedArray;
-  }
-
-  public isDataTransferMode = false;
-
-  /**
-   * Retrieves the received buffer.
-   *
-   * @return {string} The received buffer as a string.
-   */
-  public getReceivedData(): string {
-    if (!this.isDataTransferMode) {
-      return '';
-    }
-
-    const receivedData = this.picoRecivedBuff;
-    // バッファをクリア
-    this.picoRecivedBuff = '';
-
-    // データ中に CTRL+D が現れたら、その手前までのデータを返却し、データ転送モードを終了にする
-    const endIndex = receivedData.indexOf('\x04'); // CTRL+D
-    if (endIndex !== -1) {
-      this.isDataTransferMode = false;
-      return receivedData.substring(0, endIndex);
-    }
-
-    return receivedData;
-  }
-  /**
-   * Wait >OK
-   *
-   */
-  async waitForOK(): Promise<void> {
-    const targetString = '>OK';
-    let receivedData = '';
-    const timeout = 3000; // タイムアウト時間をミリ秒で設定
-    const startTime = Date.now();
-
-    while (!this.isDataTransferMode) {
-      // 受信データを取得
-      const decodedData = this.getReceivedBuff();
-      console.log('Decoded Data:', decodedData);
-
-      // 受信データに">OK"が含まれているかチェック
-      receivedData += decodedData;
-      if (receivedData.includes(targetString)) {
-        console.log('Received ">OK"');
-        // OKが見つかった後のデータをpicoRecivedBuffに残す
-        const remainingData = receivedData.split(targetString)[1];
-        this.picoRecivedBuff = remainingData ? remainingData : '';
-        // データ転送モードに入るフラグを立てる
-        this.isDataTransferMode = true;
-        break;
-      }
-      console.log('waiting:', receivedData);
-
-      // タイムアウトチェック
-      if (Date.now() - startTime > timeout) {
-        throw new Error('Timeout waiting for ">OK"');
-      }
-
-      // 少し待機してから再度チェック
-      await new Promise<void>(
-          (resolve) => {
-            setTimeout(resolve, 100);
-          }
-      );
     }
   }
 
@@ -502,93 +414,45 @@ class Pico {
       this.markDisconnected();
     }
   }
+
   /**
-   * read the port.
+   * 読み込みバッファをクリアし、特定の文字を待ち、それまでに受信した文字を返す
+   * @param {string | false} targetChar
+   *  - 待機する特定の文字、またはチェックを無効にするためのfalse
+   * @return {Promise<string>} - 受信した文字列を返すプロミス
    */
-  async readpicoport(): Promise<void> {
-    let result: { value?: Uint8Array, done?: boolean } = {};
-    while (picoport && picoport.readable) {
-      try {
-        picoreader = picoport.readable.getReader({mode: 'byob'});
-        let buffer = null;
-        result = await (async () => {
-          if (!buffer) {
-            buffer = new ArrayBuffer(bufferSize);
+  async clearpicoport(targetChar: string | false): Promise<string> {
+    let result = '';
+    if (picoport && picoport.readable) {
+      picoreader = picoport.readable.getReader();
+      const generator = readFromPort(targetChar);
+      if (picoreader) {
+        try {
+          for await (const chunk of generator) {
+            if (targetChar && chunk.includes(targetChar)) {
+              // 特定の文字が含まれている部分を除外
+              const [beforeTarget] = chunk.split(targetChar);
+              result += beforeTarget;
+              break;
+            } else {
+              result += chunk;
+            }
+            console.log('Result:', chunk);
           }
-          const {value, done} =
-              await picoreader.read(new Uint8Array(buffer, 0, bufferSize));
-          buffer = value?.buffer;
-          return {value, done};
-        })();
-        const stringValue =
-          result.value ? new TextDecoder().decode(result.value) : '';
-        console.log('Received:', result.done, stringValue);
-        if (result.value) {
-          this.putBuffer(result.value); // バッファに蓄積 or ターミナルに出力
+        } catch (e) {
+          console.error(e);
           await new Promise<void>((resolve) => {
-            if (result.value !== undefined) {
-              term.write(result.value, resolve);
+            if (e instanceof Error) {
+              term.writeln(`<ERROR: ${e.message}>`, resolve);
             }
           });
-        }
-        if (result.done) {
-          break;
-        }
-      } catch (e) {
-        console.error(e);
-        await new Promise<void>((resolve) => {
-          if (e instanceof Error) {
-            term.writeln(`<ERROR: ${e.message}>`, resolve);
-          }
-        });
-      } finally {
-        if (picoreader) {
+        } finally {
           picoreader.releaseLock();
           picoreader = undefined;
         }
       }
     }
-  }
-  /**
-   * 読み込みバッファをクリア
-   */
-  async clearpicoport(): Promise<void> {
-    let result: { value?: Uint8Array, done?: boolean } = {};
-    while (picoport && picoport.readable) {
-      try {
-        picoreader = picoport.readable.getReader({mode: 'byob'});
-        let buffer = null;
-        result = await (async () => {
-          if (!buffer) {
-            buffer = new ArrayBuffer(bufferSize);
-          }
-          const {value, done} =
-              await picoreader.read(new Uint8Array(buffer, 0, bufferSize));
-          buffer = value?.buffer;
-          return {value, done};
-        })();
-        if (result.value) {
-          const stringValue =
-            result.value ? new TextDecoder().decode(result.value) : '';
-          console.log('skip:', stringValue);
-        }
-        if (result.done) {
-          break;
-        }
-      } catch (e) {
-        console.error(e);
-        await new Promise<void>((resolve) => {
-          if (e instanceof Error) {
-            term.writeln(`<ERROR: ${e.message}>`, resolve);
-          }
-        });
-      } finally {
-        if (picoreader) {
-          picoreader.releaseLock();
-          picoreader = undefined;
-        }
-      }
-    }
+    return result;
   }
   /**
    * Initiates a connection to the selected port.
@@ -596,8 +460,66 @@ class Pico {
   async connectToPort(): Promise<void> {
     await this.openpicoport(); // ポートを開く
     await this.readpicoport(); // ポートから読み取りターミナルに出力
-    term.writeln('<DONE!!!!!!!>');
     // await this.closepicoport();
+  }
+  /**
+   * read the port.
+   */
+  async readpicoport(): Promise<void> {
+    if (picoport && picoport.readable) {
+      picoreader = picoport.readable.getReader();
+      const generator = readFromPort(false);
+      if (picoreader) {
+        try {
+          for await (const chunk of generator) {
+            console.log('Received:', chunk);
+            // ターミナルに出力
+            await new Promise<void>((resolve) => {
+              term.write(chunk, resolve);
+            });
+          }
+        } catch (e) {
+          console.error(e);
+          await new Promise<void>((resolve) => {
+            if (e instanceof Error) {
+              term.writeln(`<ERROR: ${e.message}>`, resolve);
+            }
+          });
+        } finally {
+          picoreader.releaseLock();
+          picoreader = undefined;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * シリアルポートからデータを読み取るジェネレーター関数
+ * @param {string | false} targetChar
+ *  - 待機する特定の文字
+ * @return {AsyncGenerator<string>}
+ *  - データチャンクを文字列として返す非同期ジェネレーター
+ */
+async function* readFromPort(
+    targetChar: string | false): AsyncGenerator<string> {
+  const decoder = new TextDecoder();
+  if (picoreader) {
+    while (true) {
+      const {value, done} = await picoreader.read();
+      if (done) {
+        console.log('done:');
+        return;
+      }
+      const chunk = decoder.decode(value, {stream: true});
+      console.log('yield:', chunk);
+      yield chunk;
+      // targetChar が false でない場合にのみチェック
+      if (targetChar && chunk.includes(targetChar)) {
+        console.log('targetChar:', chunk);
+        return;
+      }
+    }
   }
 }
 
