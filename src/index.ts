@@ -64,41 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /**
- * Load main.py from the MicroPython device and display it in the editor.
- *
- * @param {monaco.editor.IStandaloneCodeEditor} editor
- *  - The Monaco editor instance.
- */
-async function loadTempPy(editor: monaco.editor.IStandaloneCodeEditor) {
-  if (picoreader) {
-    await picoreader.cancel(); // ターミナル出力を停止
-  }
-  if (pico.prepareWritablePort()) {
-    await pico.write('\x01'); // CTRL+A：raw モード
-    await pico.write('import os\r');
-    await pico.write('with open("temp.py") as f:\r');
-    await pico.write('  print(f.read())\r');
-    await pico.write('\x04'); // CTRL+D
-    pico.releaseLock();
-
-    await pico.clearpicoport('OK'); // ">OK"を待つ
-    const result = await pico.clearpicoport('\x04'); // CTRL-Dを待つ
-
-    // ファイル内容を表示
-    console.log('result:', result);
-    const hexResult = Array.from(result, (char) =>
-      char.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
-    console.log('dump:', hexResult);
-
-    pico.sendCommand('\x02'); // CTRL+B
-    editor.setValue(result); // エディタに結果を表示
-  }
-  pico.readpicoport(); // ターミナル出力を再開
-}
-
-/**
- * Elements of the port selection dropdown extend HTMLOptionElement so that
- * they can reference the SerialPort they represent.
+ * シリアルポートの選択
  */
 declare class PortOption extends HTMLOptionElement {
   port: SerialPort | SerialPortPolyfill;
@@ -118,27 +84,6 @@ const usePolyfill = urlParams.has('polyfill');
 
 const term = new Terminal({
   scrollback: 10_000,
-});
-
-const fitAddon = new FitAddon();
-term.loadAddon(fitAddon);
-
-term.loadAddon(new WebLinksAddon());
-
-const encoder = new TextEncoder();
-
-term.onData((data) => {
-  // echoCheckbox.checked
-  //   term.write(data);
-
-  if (picoport?.writable == null) {
-    console.warn(`unable to find writable port`);
-    return;
-  }
-
-  const writer = picoport.writable.getWriter();
-  writer.write(encoder.encode(data));
-  writer.releaseLock();
 });
 
 /**
@@ -195,6 +140,131 @@ function maybeAddNewPort(port: SerialPort | SerialPortPolyfill): PortOption {
 }
 
 /**
+ * Sets |port| to the currently selected port. If none is selected then the
+ * user is prompted for one.
+ */
+async function getSelectedPort(): Promise<void> {
+  if (portSelector.value == 'prompt') {
+    try {
+      const serial = usePolyfill ? polyfill : navigator.serial;
+      picoport = await serial.requestPort({});
+    } catch (e) {
+      return;
+    }
+    const portOption = maybeAddNewPort(picoport);
+    portOption.selected = true;
+  } else {
+    const selectedOption = portSelector.selectedOptions[0] as PortOption;
+    picoport = selectedOption.port;
+  }
+}
+
+/**
+ * Closes the currently active connection.
+ */
+async function disconnectFromPort(): Promise<void> {
+  // Move |port| into a local variable so that connectToPort() doesn't try to
+  // close it on exit.
+  const localPort = picoport;
+  picoport = undefined;
+
+  if (picoreader) {
+    await picoreader.cancel();
+  }
+
+  if (localPort) {
+    try {
+      await localPort.close();
+    } catch (e) {
+      console.error(e);
+      if (e instanceof Error) {
+        term.writeln(`<ERROR: ${e.message}>`);
+      }
+    }
+  }
+
+  pico.markDisconnected();
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const terminalElement = document.getElementById('terminal');
+  if (terminalElement) {
+    term.open(terminalElement);
+    fitAddon.fit();
+
+    window.addEventListener('resize', () => {
+      fitAddon.fit();
+    });
+  }
+
+  const downloadOutput =
+    document.getElementById('download') as HTMLSelectElement;
+  downloadOutput.addEventListener('click', downloadTerminalContents);
+
+  const clearOutput = document.getElementById('clear') as HTMLSelectElement;
+  clearOutput.addEventListener('click', clearTerminalContents);
+
+  portSelector = document.getElementById('ports') as HTMLSelectElement;
+
+  connectButton = document.getElementById('connect') as HTMLButtonElement;
+  connectButton.addEventListener('click', () => {
+    if (picoport) {
+      disconnectFromPort();
+    } else {
+      pico.connectToPort();
+    }
+  });
+
+
+  const serial = usePolyfill ? polyfill : navigator.serial;
+  const ports: (SerialPort | SerialPortPolyfill)[] = await serial.getPorts();
+  ports.forEach((port) => addNewPort(port));
+
+  // These events are not supported by the polyfill.
+  // https://github.com/google/web-serial-polyfill/issues/20
+  if (!usePolyfill) {
+    navigator.serial.addEventListener('connect', (event) => {
+      const portOption = addNewPort(event.target as SerialPort);
+      if (autoconnect) {
+        portOption.selected = true;
+        pico.connectToPort();
+      }
+    });
+    navigator.serial.addEventListener('disconnect', (event) => {
+      const portOption = findPortOption(event.target as SerialPort);
+      if (portOption) {
+        portOption.remove();
+      }
+    });
+  }
+});
+
+/**
+ * ターミナル（REPL）
+ */
+
+const fitAddon = new FitAddon();
+term.loadAddon(fitAddon);
+
+term.loadAddon(new WebLinksAddon());
+
+const encoder = new TextEncoder();
+
+term.onData((data) => {
+  // echoCheckbox.checked
+  //   term.write(data);
+
+  if (picoport?.writable == null) {
+    console.warn(`unable to find writable port`);
+    return;
+  }
+
+  const writer = picoport.writable.getWriter();
+  writer.write(encoder.encode(data));
+  writer.releaseLock();
+});
+
+/**
  * Download the terminal's contents to a file.
  */
 function downloadTerminalContents(): void {
@@ -233,26 +303,6 @@ function clearTerminalContents(): void {
   }
 
   term.clear();
-}
-
-/**
- * Sets |port| to the currently selected port. If none is selected then the
- * user is prompted for one.
- */
-async function getSelectedPort(): Promise<void> {
-  if (portSelector.value == 'prompt') {
-    try {
-      const serial = usePolyfill ? polyfill : navigator.serial;
-      picoport = await serial.requestPort({});
-    } catch (e) {
-      return;
-    }
-    const portOption = maybeAddNewPort(picoport);
-    portOption.selected = true;
-  } else {
-    const selectedOption = portSelector.selectedOptions[0] as PortOption;
-    picoport = selectedOption.port;
-  }
 }
 
 /**
@@ -528,81 +578,34 @@ async function* readFromPort(
 const pico = new Pico();
 
 /**
- * Closes the currently active connection.
+ * Load main.py from the MicroPython device and display it in the editor.
+ *
+ * @param {monaco.editor.IStandaloneCodeEditor} editor
+ *  - The Monaco editor instance.
  */
-async function disconnectFromPort(): Promise<void> {
-  // Move |port| into a local variable so that connectToPort() doesn't try to
-  // close it on exit.
-  const localPort = picoport;
-  picoport = undefined;
-
+async function loadTempPy(editor: monaco.editor.IStandaloneCodeEditor) {
   if (picoreader) {
-    await picoreader.cancel();
+    await picoreader.cancel(); // ターミナル出力を停止
   }
+  if (pico.prepareWritablePort()) {
+    await pico.write('\x01'); // CTRL+A：raw モード
+    await pico.write('import os\r');
+    await pico.write('with open("temp.py") as f:\r');
+    await pico.write('  print(f.read())\r');
+    await pico.write('\x04'); // CTRL+D
+    pico.releaseLock();
 
-  if (localPort) {
-    try {
-      await localPort.close();
-    } catch (e) {
-      console.error(e);
-      if (e instanceof Error) {
-        term.writeln(`<ERROR: ${e.message}>`);
-      }
-    }
+    await pico.clearpicoport('OK'); // ">OK"を待つ
+    const result = await pico.clearpicoport('\x04'); // CTRL-Dを待つ
+
+    // ファイル内容を表示
+    console.log('result:', result);
+    const hexResult = Array.from(result, (char) =>
+      char.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
+    console.log('dump:', hexResult);
+
+    pico.sendCommand('\x02'); // CTRL+B
+    editor.setValue(result); // エディタに結果を表示
   }
-
-  pico.markDisconnected();
+  pico.readpicoport(); // ターミナル出力を再開
 }
-
-document.addEventListener('DOMContentLoaded', async () => {
-  const terminalElement = document.getElementById('terminal');
-  if (terminalElement) {
-    term.open(terminalElement);
-    fitAddon.fit();
-
-    window.addEventListener('resize', () => {
-      fitAddon.fit();
-    });
-  }
-
-  const downloadOutput =
-    document.getElementById('download') as HTMLSelectElement;
-  downloadOutput.addEventListener('click', downloadTerminalContents);
-
-  const clearOutput = document.getElementById('clear') as HTMLSelectElement;
-  clearOutput.addEventListener('click', clearTerminalContents);
-
-  portSelector = document.getElementById('ports') as HTMLSelectElement;
-
-  connectButton = document.getElementById('connect') as HTMLButtonElement;
-  connectButton.addEventListener('click', () => {
-    if (picoport) {
-      disconnectFromPort();
-    } else {
-      pico.connectToPort();
-    }
-  });
-
-
-  const serial = usePolyfill ? polyfill : navigator.serial;
-  const ports: (SerialPort | SerialPortPolyfill)[] = await serial.getPorts();
-  ports.forEach((port) => addNewPort(port));
-
-  // These events are not supported by the polyfill.
-  // https://github.com/google/web-serial-polyfill/issues/20
-  if (!usePolyfill) {
-    navigator.serial.addEventListener('connect', (event) => {
-      const portOption = addNewPort(event.target as SerialPort);
-      if (autoconnect) {
-        portOption.selected = true;
-        pico.connectToPort();
-      }
-    });
-    navigator.serial.addEventListener('disconnect', (event) => {
-      const portOption = findPortOption(event.target as SerialPort);
-      if (portOption) {
-        portOption.remove();
-      }
-    });
-  }
-});
