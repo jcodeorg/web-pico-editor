@@ -80,16 +80,17 @@ async function loadTempPy(editor: monaco.editor.IStandaloneCodeEditor) {
     await pico.write('  print(f.read())\r');
     await pico.write('\x04'); // CTRL+D
     pico.releaseLock();
-    console.log('!!!!!!!!!!Waiting for >OK');
+
     await pico.clearpicoport('OK'); // ">OK"を待つ
-    console.log('!!!!!!!!!!Waiting for CTRL-D');
-    const result = await pico.clearpicoport('\x04'); // "CTRL-D"を待つ
+    const result = await pico.clearpicoport('\x04'); // CTRL-Dを待つ
+
+    // ファイル内容を表示
     console.log('result:', result);
     const hexResult = Array.from(result, (char) =>
       char.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
     console.log('dump:', hexResult);
-    pico.sendCommand('\x02'); // CTRL+B
 
+    pico.sendCommand('\x02'); // CTRL+B
     editor.setValue(result); // エディタに結果を表示
   }
   pico.readpicoport(); // ターミナル出力を再開
