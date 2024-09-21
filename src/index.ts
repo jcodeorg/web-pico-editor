@@ -81,11 +81,11 @@ class ReplTerminal extends Terminal {
       // echoCheckbox.checked
       //   term.write(data);
       const encoder = new TextEncoder();
-      if (picoport?.writable == null) {
+      if (picoserial.picoport?.writable == null) {
         console.warn(`unable to find writable port`);
         return;
       }
-      const writer = picoport.writable.getWriter();
+      const writer = picoserial.picoport.writable.getWriter();
       writer.write(encoder.encode(data));
       writer.releaseLock();
     });
@@ -145,148 +145,152 @@ function downloadTerminalContents(): void {
 }
 
 /**
+ * シリアルポート
+ */
+
+/**
  * シリアルポートの選択
  */
 declare class PortOption extends HTMLOptionElement {
   port: SerialPort;
 }
 
-let portSelector: HTMLSelectElement;
-let connectButton: HTMLButtonElement;
-const autoconnect = false;
-
-let portCounter = 1;
-let picoport: SerialPort | undefined;
-let picoreader:
-  ReadableStreamDefaultReader | ReadableStreamBYOBReader | undefined;
-
 /**
- * Returns the option corresponding to the given SerialPort if one is present
- * in the selection dropdown.
- *
- * @param {SerialPort} port the port to find
- * @return {PortOption}
+ * PicoSerialクラスは、シリアルポートの選択と接続を管理します。
  */
-function findPortOption(port: SerialPort):
+class PicoSerial {
+  public portSelector: HTMLSelectElement;
+  public connectButton: HTMLButtonElement;
+  private portCounter = 1;
+  public picoport: SerialPort | undefined;
+  public picoreader:
+    ReadableStreamDefaultReader | ReadableStreamBYOBReader | undefined;
+  /**
+   * Returns the option corresponding to the given SerialPort if one is present
+   * in the selection dropdown.
+   *
+   * @param {SerialPort} port the port to find
+   * @return {PortOption}
+   */
+  findPortOption(port: SerialPort):
     PortOption | null {
-  for (let i = 0; i < portSelector.options.length; ++i) {
-    const option = portSelector.options[i];
-    if (option.value === 'prompt') {
-      continue;
+    for (let i = 0; i < this.portSelector.options.length; ++i) {
+      const option = this.portSelector.options[i];
+      if (option.value === 'prompt') {
+        continue;
+      }
+      const portOption = option as PortOption;
+      if (portOption.port === port) {
+        return portOption;
+      }
     }
-    const portOption = option as PortOption;
-    if (portOption.port === port) {
-      return portOption;
-    }
+    return null;
   }
 
-  return null;
-}
-
-/**
- * Adds the given port to the selection dropdown.
- *
- * @param {SerialPort} port the port to add
- * @return {PortOption}
- */
-function addNewPort(port: SerialPort): PortOption {
-  const portOption = document.createElement('option') as PortOption;
-  portOption.textContent = `Port ${portCounter++}`;
-  portOption.port = port;
-  portSelector.appendChild(portOption);
-  return portOption;
-}
-
-/**
- * Adds the given port to the selection dropdown, or returns the existing
- * option if one already exists.
- *
- * @param {SerialPort} port the port to add
- * @return {PortOption}
- */
-function maybeAddNewPort(port: SerialPort): PortOption {
-  const portOption = findPortOption(port);
-  if (portOption) {
+  /**
+  * Adds the given port to the selection dropdown.
+  *
+  * @param {SerialPort} port the port to add
+  * @return {PortOption}
+  */
+  addNewPort(port: SerialPort): PortOption {
+    const portOption = document.createElement('option') as PortOption;
+    portOption.textContent = `Port ${this.portCounter++}`;
+    portOption.port = port;
+    this.portSelector.appendChild(portOption);
     return portOption;
   }
 
-  return addNewPort(port);
-}
-
-/**
- * Sets |port| to the currently selected port. If none is selected then the
- * user is prompted for one.
- */
-async function getSelectedPort(): Promise<void> {
-  if (portSelector.value == 'prompt') {
-    try {
-      const serial = navigator.serial;
-      picoport = await serial.requestPort({});
-    } catch (e) {
-      return;
+  /**
+  * Adds the given port to the selection dropdown, or returns the existing
+  * option if one already exists.
+  *
+  * @param {SerialPort} port the port to add
+  * @return {PortOption}
+  */
+  maybeAddNewPort(port: SerialPort): PortOption {
+    const portOption = this.findPortOption(port);
+    if (portOption) {
+      return portOption;
     }
-    const portOption = maybeAddNewPort(picoport);
-    portOption.selected = true;
-  } else {
-    const selectedOption = portSelector.selectedOptions[0] as PortOption;
-    picoport = selectedOption.port;
-  }
-}
-
-/**
- * Closes the currently active connection.
- */
-async function disconnectFromPort(): Promise<void> {
-  // Move |port| into a local variable so that connectToPort() doesn't try to
-  // close it on exit.
-  const localPort = picoport;
-  picoport = undefined;
-
-  if (picoreader) {
-    await picoreader.cancel();
+    return this.addNewPort(port);
   }
 
-  if (localPort) {
-    try {
-      await localPort.close();
-    } catch (e) {
-      console.error(e);
-      if (e instanceof Error) {
-        term.writeln(`<ERROR: ${e.message}>`);
+  /**
+  * Sets |port| to the currently selected port. If none is selected then the
+  * user is prompted for one.
+  */
+  async getSelectedPort(): Promise<void> {
+    if (this.portSelector.value == 'prompt') {
+      try {
+        const serial = navigator.serial;
+        this.picoport = await serial.requestPort({});
+      } catch (e) {
+        return;
+      }
+      const portOption = this.maybeAddNewPort(this.picoport);
+      portOption.selected = true;
+    } else {
+      const selectedOption = this.portSelector.selectedOptions[0] as PortOption;
+      this.picoport = selectedOption.port;
+    }
+  }
+
+  /**
+  * Closes the currently active connection.
+  */
+  async disconnectFromPort(): Promise<void> {
+    // Move |port| into a local variable so that connectToPort() doesn't try to
+    // close it on exit.
+    const localPort = this.picoport;
+    this.picoport = undefined;
+
+    if (this.picoreader) {
+      await this.picoreader.cancel();
+    }
+
+    if (localPort) {
+      try {
+        await localPort.close();
+      } catch (e) {
+        console.error(e);
+        if (e instanceof Error) {
+          term.writeln(`<ERROR: ${e.message}>`);
+        }
       }
     }
+    pico.markDisconnected();
   }
-
-  pico.markDisconnected();
 }
 
+const picoserial = new PicoSerial();
+
 document.addEventListener('DOMContentLoaded', async () => {
-  portSelector = document.getElementById('ports') as HTMLSelectElement;
-  const serial = navigator.serial;
-  const ports: (SerialPort)[] = await serial.getPorts();
-  ports.forEach((port) => addNewPort(port));
+  picoserial.portSelector =
+    document.getElementById('ports') as HTMLSelectElement;
+  const ports: (SerialPort)[] = await navigator.serial.getPorts();
+  ports.forEach((port) => picoserial.addNewPort(port));
 
 
-  connectButton = document.getElementById('connect') as HTMLButtonElement;
-  connectButton.addEventListener('click', () => {
-    if (picoport) {
-      disconnectFromPort();
+  picoserial.connectButton =
+    document.getElementById('connect') as HTMLButtonElement;
+  picoserial.connectButton.addEventListener('click', () => {
+    if (picoserial.picoport) {
+      picoserial.disconnectFromPort();
     } else {
-      pico.connectToPort();
+      pico.openpicoport(); // ポートを開く
+      pico.readpicoport(); // ポートから読み取りターミナルに出力
     }
   });
 
   // These events are not supported by the polyfill.
   // https://github.com/google/web-serial-polyfill/issues/20
   navigator.serial.addEventListener('connect', (event) => {
-    const portOption = addNewPort(event.target as SerialPort);
-    if (autoconnect) {
-      portOption.selected = true;
-      pico.connectToPort();
-    }
+    const portOption = picoserial.addNewPort(event.target as SerialPort);
+    portOption.selected = true;
   });
   navigator.serial.addEventListener('disconnect', (event) => {
-    const portOption = findPortOption(event.target as SerialPort);
+    const portOption = picoserial.findPortOption(event.target as SerialPort);
     if (portOption) {
       portOption.remove();
     }
@@ -305,8 +309,8 @@ class Pico {
    * The writer instance or null if not available.
    */
   prepareWritablePort() {
-    if (picoport && picoport.writable) {
-      this.writer = picoport.writable.getWriter();
+    if (picoserial.picoport && picoserial.picoport.writable) {
+      this.writer = picoserial.picoport.writable.getWriter();
     } else {
       this.writer = null;
     }
@@ -341,8 +345,8 @@ class Pico {
    * @param {string} content - The content to write to the file.
    */
   async writeFile(filename: string, content: string) {
-    if (picoreader) {
-      await picoreader.cancel(); // ターミナル出力を停止
+    if (picoserial.picoreader) {
+      await picoserial.picoreader.cancel(); // ターミナル出力を停止
     }
     this.clearpicoport(false); // ターミナル出力せずに読み込み（バッファをクリア）
     if (this.prepareWritablePort()) {
@@ -365,8 +369,8 @@ class Pico {
       this.releaseLock();
       pico.sendCommand('\x02'); // CTRL+B
     }
-    if (picoreader) {
-      await picoreader.cancel(); // ターミナル出力を停止
+    if (picoserial.picoreader) {
+      await picoserial.picoreader.cancel(); // ターミナル出力を停止
     }
     this.readpicoport(); // ターミナル出力を再開
   }
@@ -402,32 +406,32 @@ class Pico {
    */
   public markDisconnected(): void {
     term.writeln('<DISCONNECTED>');
-    portSelector.disabled = false;
-    connectButton.textContent = 'Connect';
-    connectButton.disabled = false;
-    connectButton.classList.add('button-default');
-    picoport = undefined;
+    picoserial.portSelector.disabled = false;
+    picoserial.connectButton.textContent = 'Connect';
+    picoserial.connectButton.disabled = false;
+    picoserial.connectButton.classList.add('button-default');
+    picoserial.picoport = undefined;
   }
 
   /**
    * Open the port.
    */
   async openpicoport(): Promise<void> {
-    await getSelectedPort();
-    if (!picoport) {
+    await picoserial.getSelectedPort();
+    if (!picoserial.picoport) {
       return;
     }
     const options = {
       baudRate: 115200,
     };
-    portSelector.disabled = true;
-    connectButton.textContent = 'Connecting...';
-    connectButton.classList.remove('button-default');
+    picoserial.portSelector.disabled = true;
+    picoserial.connectButton.textContent = 'Connecting...';
+    picoserial.connectButton.classList.remove('button-default');
     try {
-      await picoport.open(options);
+      await picoserial.picoport.open(options);
       term.writeln('<CONNECTED>');
-      connectButton.textContent = 'Disconnect';
-      connectButton.disabled = false;
+      picoserial.connectButton.textContent = 'Disconnect';
+      picoserial.connectButton.disabled = false;
     } catch (e) {
       console.error(e);
       if (e instanceof Error) {
@@ -441,9 +445,9 @@ class Pico {
    * Close the port.
    */
   async closepicoport(): Promise<void> {
-    if (picoport) {
+    if (picoserial.picoport) {
       try {
-        await picoport.close();
+        await picoserial.picoport.close();
       } catch (e) {
         console.error(e);
         if (e instanceof Error) {
@@ -462,10 +466,10 @@ class Pico {
    */
   async clearpicoport(targetChar: string | false): Promise<string> {
     let result = '';
-    if (picoport && picoport.readable) {
-      picoreader = picoport.readable.getReader();
+    if (picoserial.picoport && picoserial.picoport.readable) {
+      picoserial.picoreader = picoserial.picoport.readable.getReader();
       const generator = readFromPort(targetChar);
-      if (picoreader) {
+      if (picoserial.picoreader) {
         try {
           for await (const chunk of generator) {
             if (targetChar && chunk.includes(targetChar)) {
@@ -486,29 +490,21 @@ class Pico {
             }
           });
         } finally {
-          picoreader.releaseLock();
-          picoreader = undefined;
+          picoserial.picoreader.releaseLock();
+          picoserial.picoreader = undefined;
         }
       }
     }
     return result;
   }
   /**
-   * Initiates a connection to the selected port.
-   */
-  async connectToPort(): Promise<void> {
-    await this.openpicoport(); // ポートを開く
-    await this.readpicoport(); // ポートから読み取りターミナルに出力
-    // await this.closepicoport();
-  }
-  /**
    * read the port.
    */
   async readpicoport(): Promise<void> {
-    if (picoport && picoport.readable) {
-      picoreader = picoport.readable.getReader();
+    if (picoserial.picoport && picoserial.picoport.readable) {
+      picoserial.picoreader = picoserial.picoport.readable.getReader();
       const generator = readFromPort(false);
-      if (picoreader) {
+      if (picoserial.picoreader) {
         try {
           for await (const chunk of generator) {
             console.log('Received:', chunk);
@@ -525,8 +521,8 @@ class Pico {
             }
           });
         } finally {
-          picoreader.releaseLock();
-          picoreader = undefined;
+          picoserial.picoreader.releaseLock();
+          picoserial.picoreader = undefined;
         }
       }
     }
@@ -543,9 +539,9 @@ class Pico {
 async function* readFromPort(
     targetChar: string | false): AsyncGenerator<string> {
   const decoder = new TextDecoder();
-  if (picoreader) {
+  if (picoserial.picoreader) {
     while (true) {
-      const {value, done} = await picoreader.read();
+      const {value, done} = await picoserial.picoreader.read();
       if (done) {
         console.log('done:');
         return;
@@ -572,8 +568,8 @@ const pico = new Pico();
  *  - The Monaco editor instance.
  */
 async function loadTempPy(editor: monaco.editor.IStandaloneCodeEditor) {
-  if (picoreader) {
-    await picoreader.cancel(); // ターミナル出力を停止
+  if (picoserial.picoreader) {
+    await picoserial.picoreader.cancel(); // ターミナル出力を停止
   }
   if (pico.prepareWritablePort()) {
     await pico.write('\x01'); // CTRL+A：raw モード
