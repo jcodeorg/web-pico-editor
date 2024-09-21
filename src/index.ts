@@ -64,6 +64,104 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /**
+ * ターミナル（REPL）
+ */
+const fitAddon = new FitAddon();
+
+/**
+ * REPL用ターミナルのコンストラクタ
+ * @param {any} options - ターミナルのオプション
+ */
+class ReplTerminal extends Terminal {
+  /**
+   * REPL用ターミナルのコンストラクタ
+   * @param {any} options - ターミナルのオプション
+   */
+  constructor(options: any) {
+    // 親クラスのコンストラクタを呼び出す
+    super(options);
+    this.loadAddon(fitAddon);
+    this.loadAddon(new WebLinksAddon());
+
+    this.onData((data)=>{
+      // echoCheckbox.checked
+      //   term.write(data);
+      const encoder = new TextEncoder();
+      if (picoport?.writable == null) {
+        console.warn(`unable to find writable port`);
+        return;
+      }
+      const writer = picoport.writable.getWriter();
+      writer.write(encoder.encode(data));
+      writer.releaseLock();
+    });
+  }
+
+  /**
+   * Download the terminal's contents to a file.
+   */
+  downloadTerminalContents(): void {
+    if (!this) {
+      throw new Error('no terminal instance found');
+    }
+
+    if (this.rows === 0) {
+      console.log('No output yet');
+      return;
+    }
+
+    this.selectAll();
+    const contents = this.getSelection();
+    this.clearSelection();
+    const linkContent = URL.createObjectURL(
+        new Blob([new TextEncoder().encode(contents).buffer],
+            {type: 'text/plain'}));
+    const fauxLink = document.createElement('a');
+    fauxLink.download = `terminal_content_${new Date().getTime()}.txt`;
+    fauxLink.href = linkContent;
+    fauxLink.click();
+  }
+
+  /**
+   * Clear the terminal's contents.
+   */
+  clearTerminalContents(): void {
+    if (!this) {
+      throw new Error('no terminal instance found');
+    }
+    if (this.rows === 0) {
+      console.log('No output yet');
+      return;
+    }
+    this.clear();
+  }
+}
+
+// Term クラスのインスタンスを作成
+const term = new ReplTerminal({
+  scrollback: 10_000,
+});
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const terminalElement = document.getElementById('terminal');
+  if (terminalElement) {
+    term.open(terminalElement);
+    fitAddon.fit();
+
+    window.addEventListener('resize', () => {
+      fitAddon.fit();
+    });
+  }
+
+  const downloadOutput =
+    document.getElementById('download') as HTMLSelectElement;
+  downloadOutput.addEventListener('click', term.downloadTerminalContents);
+
+  const clearOutput = document.getElementById('clear') as HTMLSelectElement;
+  clearOutput.addEventListener('click', term.clearTerminalContents);
+});
+
+/**
  * シリアルポートの選択
  */
 declare class PortOption extends HTMLOptionElement {
@@ -81,10 +179,6 @@ let picoreader:
 
 const urlParams = new URLSearchParams(window.location.search);
 const usePolyfill = urlParams.has('polyfill');
-
-const term = new Terminal({
-  scrollback: 10_000,
-});
 
 /**
  * Returns the option corresponding to the given SerialPort if one is present
@@ -187,24 +281,11 @@ async function disconnectFromPort(): Promise<void> {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const terminalElement = document.getElementById('terminal');
-  if (terminalElement) {
-    term.open(terminalElement);
-    fitAddon.fit();
-
-    window.addEventListener('resize', () => {
-      fitAddon.fit();
-    });
-  }
-
-  const downloadOutput =
-    document.getElementById('download') as HTMLSelectElement;
-  downloadOutput.addEventListener('click', downloadTerminalContents);
-
-  const clearOutput = document.getElementById('clear') as HTMLSelectElement;
-  clearOutput.addEventListener('click', clearTerminalContents);
-
   portSelector = document.getElementById('ports') as HTMLSelectElement;
+  const serial = usePolyfill ? polyfill : navigator.serial;
+  const ports: (SerialPort | SerialPortPolyfill)[] = await serial.getPorts();
+  ports.forEach((port) => addNewPort(port));
+
 
   connectButton = document.getElementById('connect') as HTMLButtonElement;
   connectButton.addEventListener('click', () => {
@@ -214,11 +295,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       pico.connectToPort();
     }
   });
-
-
-  const serial = usePolyfill ? polyfill : navigator.serial;
-  const ports: (SerialPort | SerialPortPolyfill)[] = await serial.getPorts();
-  ports.forEach((port) => addNewPort(port));
 
   // These events are not supported by the polyfill.
   // https://github.com/google/web-serial-polyfill/issues/20
@@ -238,72 +314,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 });
-
-/**
- * ターミナル（REPL）
- */
-
-const fitAddon = new FitAddon();
-term.loadAddon(fitAddon);
-
-term.loadAddon(new WebLinksAddon());
-
-const encoder = new TextEncoder();
-
-term.onData((data) => {
-  // echoCheckbox.checked
-  //   term.write(data);
-
-  if (picoport?.writable == null) {
-    console.warn(`unable to find writable port`);
-    return;
-  }
-
-  const writer = picoport.writable.getWriter();
-  writer.write(encoder.encode(data));
-  writer.releaseLock();
-});
-
-/**
- * Download the terminal's contents to a file.
- */
-function downloadTerminalContents(): void {
-  if (!term) {
-    throw new Error('no terminal instance found');
-  }
-
-  if (term.rows === 0) {
-    console.log('No output yet');
-    return;
-  }
-
-  term.selectAll();
-  const contents = term.getSelection();
-  term.clearSelection();
-  const linkContent = URL.createObjectURL(
-      new Blob([new TextEncoder().encode(contents).buffer],
-          {type: 'text/plain'}));
-  const fauxLink = document.createElement('a');
-  fauxLink.download = `terminal_content_${new Date().getTime()}.txt`;
-  fauxLink.href = linkContent;
-  fauxLink.click();
-}
-
-/**
- * Clear the terminal's contents.
- */
-function clearTerminalContents(): void {
-  if (!term) {
-    throw new Error('no terminal instance found');
-  }
-
-  if (term.rows === 0) {
-    console.log('No output yet');
-    return;
-  }
-
-  term.clear();
-}
 
 /**
  * Class representing a Pico device.
