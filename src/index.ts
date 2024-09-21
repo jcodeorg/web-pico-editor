@@ -145,10 +145,6 @@ function downloadTerminalContents(): void {
 }
 
 /**
- * シリアルポート
- */
-
-/**
  * シリアルポートの選択
  */
 declare class PortOption extends HTMLOptionElement {
@@ -259,7 +255,48 @@ class PicoSerial {
         }
       }
     }
-    pico.markDisconnected();
+    this.markDisconnected();
+  }
+
+  /**
+   * Resets the UI back to the disconnected state.
+   */
+  markDisconnected(): void {
+    term.writeln('<DISCONNECTED>');
+    this.portSelector.disabled = false;
+    this.connectButton.textContent = 'Connect';
+    this.connectButton.disabled = false;
+    this.connectButton.classList.add('button-default');
+    this.picoport = undefined;
+  }
+
+  /**
+   * Open the port.
+   */
+  async openpicoport(): Promise<void> {
+    await this.getSelectedPort();
+    if (!this.picoport) {
+      return;
+    }
+    const options = {
+      baudRate: 115200,
+    };
+    this.portSelector.disabled = true;
+    this.connectButton.textContent = 'Connecting...';
+    this.connectButton.classList.remove('button-default');
+    try {
+      await picoserial.picoport.open(options);
+      term.writeln('<CONNECTED>');
+      this.connectButton.textContent = 'Disconnect';
+      this.connectButton.disabled = false;
+    } catch (e) {
+      console.error(e);
+      if (e instanceof Error) {
+        term.writeln(`<ERROR: ${e.message}>`);
+      }
+      this.markDisconnected();
+      return;
+    }
   }
 }
 
@@ -278,7 +315,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (picoserial.picoport) {
       picoserial.disconnectFromPort();
     } else {
-      pico.openpicoport(); // ポートを開く
+      picoserial.openpicoport(); // ポートを開く
       pico.readpicoport(); // ポートから読み取りターミナルに出力
     }
   });
@@ -398,63 +435,6 @@ class Pico {
     if (this.prepareWritablePort()) {
       await this.write(command);
       this.releaseLock();
-    }
-  }
-
-  /**
-   * Resets the UI back to the disconnected state.
-   */
-  public markDisconnected(): void {
-    term.writeln('<DISCONNECTED>');
-    picoserial.portSelector.disabled = false;
-    picoserial.connectButton.textContent = 'Connect';
-    picoserial.connectButton.disabled = false;
-    picoserial.connectButton.classList.add('button-default');
-    picoserial.picoport = undefined;
-  }
-
-  /**
-   * Open the port.
-   */
-  async openpicoport(): Promise<void> {
-    await picoserial.getSelectedPort();
-    if (!picoserial.picoport) {
-      return;
-    }
-    const options = {
-      baudRate: 115200,
-    };
-    picoserial.portSelector.disabled = true;
-    picoserial.connectButton.textContent = 'Connecting...';
-    picoserial.connectButton.classList.remove('button-default');
-    try {
-      await picoserial.picoport.open(options);
-      term.writeln('<CONNECTED>');
-      picoserial.connectButton.textContent = 'Disconnect';
-      picoserial.connectButton.disabled = false;
-    } catch (e) {
-      console.error(e);
-      if (e instanceof Error) {
-        term.writeln(`<ERROR: ${e.message}>`);
-      }
-      this.markDisconnected();
-      return;
-    }
-  }
-  /**
-   * Close the port.
-   */
-  async closepicoport(): Promise<void> {
-    if (picoserial.picoport) {
-      try {
-        await picoserial.picoport.close();
-      } catch (e) {
-        console.error(e);
-        if (e instanceof Error) {
-          term.writeln(`<ERROR: ${e.message}>`);
-        }
-      }
-      this.markDisconnected();
     }
   }
 
