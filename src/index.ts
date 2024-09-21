@@ -18,9 +18,6 @@ import {Terminal} from 'xterm';
 import {FitAddon} from 'xterm-addon-fit';
 import {WebLinksAddon} from 'xterm-addon-web-links';
 import 'xterm/css/xterm.css';
-import {
-  serial as polyfill, SerialPort as SerialPortPolyfill,
-} from 'web-serial-polyfill';
 import * as monaco from 'monaco-editor';
 
 // Monaco Editorの初期化
@@ -151,7 +148,7 @@ function downloadTerminalContents(): void {
  * シリアルポートの選択
  */
 declare class PortOption extends HTMLOptionElement {
-  port: SerialPort | SerialPortPolyfill;
+  port: SerialPort;
 }
 
 let portSelector: HTMLSelectElement;
@@ -159,12 +156,9 @@ let connectButton: HTMLButtonElement;
 const autoconnect = false;
 
 let portCounter = 1;
-let picoport: SerialPort | SerialPortPolyfill | undefined;
+let picoport: SerialPort | undefined;
 let picoreader:
   ReadableStreamDefaultReader | ReadableStreamBYOBReader | undefined;
-
-const urlParams = new URLSearchParams(window.location.search);
-const usePolyfill = urlParams.has('polyfill');
 
 /**
  * Returns the option corresponding to the given SerialPort if one is present
@@ -173,7 +167,7 @@ const usePolyfill = urlParams.has('polyfill');
  * @param {SerialPort} port the port to find
  * @return {PortOption}
  */
-function findPortOption(port: SerialPort | SerialPortPolyfill):
+function findPortOption(port: SerialPort):
     PortOption | null {
   for (let i = 0; i < portSelector.options.length; ++i) {
     const option = portSelector.options[i];
@@ -195,7 +189,7 @@ function findPortOption(port: SerialPort | SerialPortPolyfill):
  * @param {SerialPort} port the port to add
  * @return {PortOption}
  */
-function addNewPort(port: SerialPort | SerialPortPolyfill): PortOption {
+function addNewPort(port: SerialPort): PortOption {
   const portOption = document.createElement('option') as PortOption;
   portOption.textContent = `Port ${portCounter++}`;
   portOption.port = port;
@@ -210,7 +204,7 @@ function addNewPort(port: SerialPort | SerialPortPolyfill): PortOption {
  * @param {SerialPort} port the port to add
  * @return {PortOption}
  */
-function maybeAddNewPort(port: SerialPort | SerialPortPolyfill): PortOption {
+function maybeAddNewPort(port: SerialPort): PortOption {
   const portOption = findPortOption(port);
   if (portOption) {
     return portOption;
@@ -226,7 +220,7 @@ function maybeAddNewPort(port: SerialPort | SerialPortPolyfill): PortOption {
 async function getSelectedPort(): Promise<void> {
   if (portSelector.value == 'prompt') {
     try {
-      const serial = usePolyfill ? polyfill : navigator.serial;
+      const serial = navigator.serial;
       picoport = await serial.requestPort({});
     } catch (e) {
       return;
@@ -268,8 +262,8 @@ async function disconnectFromPort(): Promise<void> {
 
 document.addEventListener('DOMContentLoaded', async () => {
   portSelector = document.getElementById('ports') as HTMLSelectElement;
-  const serial = usePolyfill ? polyfill : navigator.serial;
-  const ports: (SerialPort | SerialPortPolyfill)[] = await serial.getPorts();
+  const serial = navigator.serial;
+  const ports: (SerialPort)[] = await serial.getPorts();
   ports.forEach((port) => addNewPort(port));
 
 
@@ -284,21 +278,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // These events are not supported by the polyfill.
   // https://github.com/google/web-serial-polyfill/issues/20
-  if (!usePolyfill) {
-    navigator.serial.addEventListener('connect', (event) => {
-      const portOption = addNewPort(event.target as SerialPort);
-      if (autoconnect) {
-        portOption.selected = true;
-        pico.connectToPort();
-      }
-    });
-    navigator.serial.addEventListener('disconnect', (event) => {
-      const portOption = findPortOption(event.target as SerialPort);
-      if (portOption) {
-        portOption.remove();
-      }
-    });
-  }
+  navigator.serial.addEventListener('connect', (event) => {
+    const portOption = addNewPort(event.target as SerialPort);
+    if (autoconnect) {
+      portOption.selected = true;
+      pico.connectToPort();
+    }
+  });
+  navigator.serial.addEventListener('disconnect', (event) => {
+    const portOption = findPortOption(event.target as SerialPort);
+    if (portOption) {
+      portOption.remove();
+    }
+  });
 });
 
 /**
